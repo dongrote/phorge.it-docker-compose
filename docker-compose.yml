@@ -28,7 +28,7 @@ services:
       mariadb:
         condition: service_healthy
     environment:
-      MARIADB_HOST: "$MARIADB_HOST"
+      MARIADB_HOST: mariadb
       MARIADB_USER: "root"
       MARIADB_PASSWORD: "$MARIADB_ROOT_PASSWORD"
       PHORGE_BASE_URI: "$PHORGE_BASE_URI"
