@@ -1,0 +1,55 @@
+services:
+  mariadb:
+    image: mariadb:latest
+    environment:
+      MARIADB_ROOT_PASSWORD: $MARIADB_ROOT_PASSWORD 
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    entrypoint: [
+      "docker-entrypoint.sh",
+      "--max-allowed-packet", "33554432",
+      "--sql-mode", "STRICT_ALL_TABLES",
+      "--innodb-buffer-pool-size", "1600M",
+      "--skip-local-infile"]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh" ,"--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  phorge:
+    build:
+      context: .
+      dockerfile: Dockerfile.phorge
+      args:
+        SERVER_NAME: "$SERVER_NAME"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      MARIADB_HOST: "$MARIADB_HOST"
+      MARIADB_USER: "root"
+      MARIADB_PASSWORD: "$MARIADB_ROOT_PASSWORD"
+      PHORGE_BASE_URI: "$PHORGE_BASE_URI"
+      PHORGE_SSH_PORT: "$PHORGE_SSH_PORT"
+      SERVER_NAME: "$SERVER_NAME"
+    ports:
+      - 443:443
+      - $PHORGE_SSH_PORT:$PHORGE_SSH_PORT
+    volumes:
+      - git_data:/var/repo
+      - file_data:/var/phorge-file-storage
+      - ./tls/fullchain.pem:/etc/nginx/tls/phorge/fullchain.pem:ro
+      - ./tls/privkey.pem:/etc/nginx/tls/phorge/privkey.pem:ro
+    healthcheck:
+      test: ["CMD", "curl" ,"-sfo", "/dev/null", "-H", "Host: $SERVER_NAME", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  mariadb_data:
+  git_data:
+  file_data:

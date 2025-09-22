@@ -1,0 +1,80 @@
+FROM debian:stable-slim
+
+ARG SERVER_NAME
+ENV SERVER_NAME=${SERVER_NAME}
+
+RUN apt-get update && apt-get upgrade -y
+RUN apt-get install -y \
+    sudo \
+    curl \
+    git \
+    openssh-server \
+    python3 \
+    python3-pygments \
+    php \
+    php-fpm \
+    php-mysql \
+    php-gd \
+    php-zip \
+    php-mbstring \
+    php-curl \
+    php-apcu \
+    nginx \
+    supervisor
+
+# Clean up apt cache
+RUN apt-get clean && \
+  rm -rf /var/lib/apt/lists/* && \
+  apt-get autoremove -y
+
+RUN mkdir /var/repo
+RUN mkdir /var/phorge-file-storage
+RUN chown www-data:www-data /var/phorge-file-storage
+
+WORKDIR /opt
+RUN git clone --depth=1 https://github.com/phorgeit/arcanist.git
+RUN git clone --depth=1 https://github.com/phorgeit/phorge.git
+RUN git config --system --add safe.directory /opt/arcanist
+RUN git config --system --add safe.directory /opt/phorge
+
+# this is necessary to let php know the client is using SSL/TLS
+ADD ssl-preamble.php /opt/phorge/support/preamble.php
+
+# configure supervisord to NOT run as a daemon
+RUN sed -i 's/\[supervisord\]/\[supervisord\]\nnodaemon=true/' /etc/supervisor/supervisord.conf
+ADD supervisor.d/nginx.conf /etc/supervisor/conf.d/
+ADD supervisor.d/php-fpm.conf /etc/supervisor/conf.d/
+ADD supervisor.d/phorge-sshd.conf /etc/supervisor/conf.d/
+
+# Configure php
+RUN sed -i 's/post_max_size.*/post_max_size = 32M/' /etc/php/8.4/fpm/php.ini
+RUN sed -i 's/;opcache\.validate_timestamps=1/opcache.validate_timestamps=0/' /etc/php/8.4/fpm/php.ini
+RUN sed -i 's/memory_limit.*/memory_limit = -1/' /etc/php/8.4/fpm/php.ini
+RUN sed -i 's/upload_max_filesize.*/upload_max_filesize = 32M/' /etc/php/8.4/fpm/php.ini
+
+# necessary for /run/nginx/nginx.pid
+RUN mkdir /run/nginx
+ADD nginx/nginx.conf /etc/nginx/nginx.conf
+RUN mkdir -p /etc/nginx/templates
+ADD nginx/sites-available/phorge.conf.template /etc/nginx/templates/
+RUN sed "s/{{SERVER_NAME}}/${SERVER_NAME}/g" /etc/nginx/templates/phorge.conf.template >/etc/nginx/sites-available/phorge.conf
+RUN ln -s /etc/nginx/sites-available/phorge.conf /etc/nginx/sites-enabled/phorge.conf
+
+# setup phorge SSH
+RUN useradd -s /bin/sh -d /opt/phorge git
+RUN usermod -p NP git
+RUN chown daemon:daemon /var/repo
+RUN cp /opt/phorge/resources/sshd/sshd_config.phorge.example /etc/ssh/sshd_config.phorge
+RUN sed -i 's/vcs-user/git/' /etc/ssh/sshd_config.phorge
+RUN echo 'www-data ALL=(daemon) SETENV: NOPASSWD: /usr/bin/git' >>/etc/sudoers
+RUN echo 'git ALL=(daemon) SETENV: NOPASSWD: /usr/bin/git, /usr/bin/git-upload-pack, /usr/bin/git-receive-pack' >>/etc/sudoers
+
+RUN cp /opt/phorge/resources/sshd/phorge-ssh-hook.sh /usr/libexec/
+RUN sed -i 's/vcs-user/git/g' /usr/libexec/phorge-ssh-hook.sh
+RUN sed -i 's#/path/to/phorge#/opt/phorge#' /usr/libexec/phorge-ssh-hook.sh
+RUN chmod 0755 /usr/libexec/phorge-ssh-hook.sh
+
+ADD phorge-scripts/startup.sh /opt/startup.sh
+RUN chmod +x /opt/startup.sh
+
+CMD ["/opt/startup.sh"]
